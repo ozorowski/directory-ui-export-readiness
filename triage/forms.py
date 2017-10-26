@@ -5,7 +5,7 @@ from directory_constants.constants import exred_sector_names
 from django import forms
 from django.db.models.fields import BLANK_CHOICE_DASH
 
-from core.widgets import CheckboxWithInlineLabel, RadioSelect
+from core.widgets import RadioSelect
 from triage import fields
 
 
@@ -62,13 +62,15 @@ class OnlineMarketplaceForm(BaseTriageForm):
 
 
 class CompanyForm(BaseTriageForm):
-    MESSAGE_MUTUALLY_EXCLUSIVE = (
-        "You cannot select a company from the list and be a sole trader"
-    )
     company_name = forms.CharField(
+        label='What is your company name? (optional)',
+        help_text="We'll use this information to personalise your experience",
+        label_suffix='',
         max_length=1000,
         required=False,
-        widget=forms.TextInput(attrs={'id': 'js-typeahead-company-name'}),
+        widget=forms.TextInput(
+            attrs={'id': 'js-typeahead-company-name'}
+        ),
     )
     company_number = fields.PaddedCharField(
         label='Company number:',
@@ -77,27 +79,27 @@ class CompanyForm(BaseTriageForm):
         required=False,
         widget=forms.HiddenInput(attrs={'id': 'js-typeahead-company-number'}),
     )
-    sole_trader = forms.BooleanField(
-        label='',
-        widget=CheckboxWithInlineLabel(
-            label='Check here if you are a sole trader'
-        ),
+
+
+class SoleTraderForm(BaseTriageForm):
+    sole_trader = forms.TypedChoiceField(
+        label='We could not find your company name. Are you a sole trader?',
+        label_suffix='',
+        coerce=lambda x: x == 'True',
+        choices=[(True, 'Yes'), (False, 'No, enter company name again')],
+        widget=RadioSelect(),
         required=False,
+        initial=False,
     )
 
-    def clean(self, *args, **kwargs):
-        cleaned_data = super().clean(*args, **kwargs)
-        if (
-            cleaned_data.get('company_number') and
-            cleaned_data.get('sole_trader')
-        ):
-            raise forms.ValidationError({
-                'sole_trader': self.MESSAGE_MUTUALLY_EXCLUSIVE
-            })
-        return cleaned_data
+    def clean_sole_trader(self):
+        return (
+            self.cleaned_data['sole_trader'] or
+            self.fields['sole_trader'].initial
+        )
 
 
-class SummaryForm(BaseTriageForm):
+class EmptyForm(forms.Form):
     pass
 
 
@@ -128,6 +130,10 @@ def get_is_sole_trader(answers):
     return answers.get('sole_trader') is True
 
 
+def get_is_limited_company(answers):
+    return answers.get('company_number') != ''
+
+
 def get_used_marketplace(answers):
     return answers.get('used_online_marketplace') is True
 
@@ -142,9 +148,9 @@ def serialize_triage_form(data):
     return {
         'sector': data['sector'],
         'exported_before': data['exported_before'],
-        'regular_exporter': data.get('regular_exporter', False),
+        'regular_exporter': data.get('regular_exporter') or False,
         'used_online_marketplace': data.get('used_online_marketplace'),
         'company_name': data.get('company_name', ''),
-        'sole_trader': data.get('sole_trader', False),
+        'sole_trader': data.get('sole_trader') or False,
         'company_number': data.get('company_number', ''),
     }

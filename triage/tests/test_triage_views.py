@@ -30,11 +30,14 @@ def test_submit_triage_regular_exporter(mock_persist_answers, client):
         view_name + '-current_step': view_class.REGULAR_EXPORTER,
         view_class.REGULAR_EXPORTER + '-regular_exporter': 'True',
     })
-    # skips the "do you use the marketplace" step
-    summary_response = client.post(url, {
+    client.post(url, {
         view_name + '-current_step': view_class.COMPANY,
         view_class.COMPANY + '-company_name': 'Example corp',
-        view_class.COMPANY + '-sole_trader': True,
+    })
+    # skips the "do you use the marketplace" step
+    summary_response = client.post(url, {
+        view_name + '-current_step': view_class.SOLE_TRADER_CONFIRM,
+        view_class.SOLE_TRADER_CONFIRM + '-sole_trader': True,
     })
     done_response = client.post(url, {
         view_name + '-current_step': view_class.SUMMARY,
@@ -88,10 +91,13 @@ def test_submit_triage_occasional_exporter(mock_persist_answers, client):
         view_name + '-current_step': view_class.ONLINE_MARKETPLACE,
         view_class.ONLINE_MARKETPLACE + '-used_online_marketplace': 'True',
     })
-    summary_response = client.post(url, {
+    client.post(url, {
         view_name + '-current_step': view_class.COMPANY,
         view_class.COMPANY + '-company_name': 'Example corp',
-        view_class.COMPANY + '-sole_trader': True,
+    })
+    summary_response = client.post(url, {
+        view_name + '-current_step': view_class.SOLE_TRADER_CONFIRM,
+        view_class.SOLE_TRADER_CONFIRM + '-sole_trader': True,
     })
     done_response = client.post(url, {
         view_name + '-current_step': view_class.SUMMARY,
@@ -138,10 +144,13 @@ def test_submit_triage_new_exporter(mock_persist_answers, client):
         view_name + '-current_step': view_class.EXPORTED_BEFORE,
         view_class.EXPORTED_BEFORE + '-exported_before': 'False',
     })
-    summary_response = client.post(url, {
+    client.post(url, {
         view_name + '-current_step': view_class.COMPANY,
         view_class.COMPANY + '-company_name': 'Example corp',
-        view_class.COMPANY + '-sole_trader': True,
+    })
+    summary_response = client.post(url, {
+        view_name + '-current_step': view_class.SOLE_TRADER_CONFIRM,
+        view_class.SOLE_TRADER_CONFIRM + '-sole_trader': True,
     })
     done_response = client.post(url, {
         view_name + '-current_step': view_class.SUMMARY,
@@ -169,6 +178,171 @@ def test_submit_triage_new_exporter(mock_persist_answers, client):
         'used_online_marketplace': None,
         'regular_exporter': False,
     })
+
+
+@patch('triage.helpers.SessionTriageAnswersManager.persist_answers')
+def test_triage_skip_company(mock_persist_answers, client):
+    url = reverse('triage-wizard')
+    view_class = views.TriageWizardFormView
+    view_name = 'triage_wizard_form_view'
+    client.post(url, {
+        view_name + '-current_step': view_class.SECTOR,
+        view_class.SECTOR + '-sector': 'HS01',
+    })
+    client.post(url, {
+        view_name + '-current_step': view_class.EXPORTED_BEFORE,
+        view_class.EXPORTED_BEFORE + '-exported_before': 'False',
+    })
+    response = client.post(url, {
+        view_name + '-current_step': view_class.COMPANY,
+        'wizard_skip_step': True,
+    })
+
+    assert response.status_code == 200
+    assert response.template_name == [view_class.templates[view_class.SUMMARY]]
+
+
+def test_triage_skip_company_clears_previous_answers(client, sso_user):
+    url = reverse('triage-wizard')
+    view_class = views.TriageWizardFormView
+    view_name = 'triage_wizard_form_view'
+
+    client.post(url, {
+        view_name + '-current_step': view_class.SECTOR,
+        view_class.SECTOR + '-sector': 'HS01',
+    })
+    client.post(url, {
+        view_name + '-current_step': view_class.EXPORTED_BEFORE,
+        view_class.EXPORTED_BEFORE + '-exported_before': 'False',
+    })
+    client.post(url, {
+        view_name + '-current_step': view_class.COMPANY,
+        view_class.COMPANY + '-company_name': 'Example corp',
+    })
+    client.post(url, {
+        view_name + '-current_step': view_class.SOLE_TRADER_CONFIRM,
+        view_class.SOLE_TRADER_CONFIRM + '-sole_trader': True,
+    })
+    client.post(url, {
+        'wizard_goto_step': view_class.SOLE_TRADER_CONFIRM,
+    })
+    client.post(url, {
+        'wizard_goto_step': view_class.COMPANY,
+    })
+    summary_response = client.post(url, {
+        view_name + '-current_step': view_class.COMPANY,
+        'wizard_skip_step': True,
+    })
+    done_response = client.post(url, {
+        view_name + '-current_step': view_class.SUMMARY,
+    })
+
+    assert done_response.status_code == 302
+    assert done_response.get('Location') == str(view_class.success_url)
+    assert b'Create my exporting journey' in summary_response.content
+    assert summary_response.context_data['all_cleaned_data'] == {
+        'company_number': '',
+        'sole_trader': False,
+        'company_name': '',
+        'sector': 'HS01',
+        'exported_before': False
+    }
+
+
+@patch('triage.helpers.SessionTriageAnswersManager.retrieve_answers')
+def test_triage_skip_company_clears_previous_answers_summary(
+    mocked_retrieve_answers, client, sso_user
+):
+    url = reverse('triage-wizard') + '?result'
+    view_class = views.TriageWizardFormView
+    view_name = 'triage_wizard_form_view'
+    mocked_retrieve_answers.return_value = {
+        'company_name': 'Acme ltd',
+        'exported_before': True,
+        'regular_exporter': True,
+        'used_online_marketplace': False,
+        'sector': 'HS01',
+        'sole_trader': True,
+        'company_number': '123445',
+        'company_name': 'Example corp',
+    }
+    client.get(url)
+    client.post(url, {
+        'wizard_goto_step': view_class.COMPANY,
+    })
+    summary_response = client.post(url, {
+        view_name + '-current_step': view_class.COMPANY,
+        'wizard_skip_step': True,
+    })
+    done_response = client.post(url, {
+        view_name + '-current_step': view_class.SUMMARY,
+    })
+
+    assert done_response.status_code == 302
+    assert done_response.get('Location') == str(view_class.success_url)
+    assert b'Continue my exporting journey' in summary_response.content
+    assert summary_response.context_data['all_cleaned_data'] == {
+        'used_online_marketplace': False,
+        'company_number': '',
+        'sole_trader': False,
+        'regular_exporter': True,
+        'company_name': '',
+        'sector': 'HS01',
+        'exported_before': True
+    }
+
+
+@patch('triage.helpers.SessionTriageAnswersManager.retrieve_answers')
+def test_triage_summary_change_answers(
+    mocked_retrieve_answers, client, sso_user
+):
+    url = reverse('triage-wizard') + '?result'
+    view_class = views.TriageWizardFormView
+    view_name = 'triage_wizard_form_view'
+    mocked_retrieve_answers.return_value = {
+        'company_name': 'Acme ltd',
+        'exported_before': True,
+        'regular_exporter': True,
+        'used_online_marketplace': False,
+        'sector': 'HS01',
+        'sole_trader': True,
+        'company_number': '123445',
+        'company_name': 'Example corp',
+    }
+    client.get(url)
+    client.post(url, {
+        'wizard_goto_step': view_class.COMPANY,
+    })
+    client.post(url, {
+        'wizard_goto_step': view_class.SOLE_TRADER_CONFIRM,
+    })
+    client.post(url, {
+        'wizard_goto_step': view_class.COMPANY,
+    })
+    client.post(url, {
+        view_name + '-current_step': view_class.COMPANY,
+        view_class.COMPANY + '-company_name': 'Other Example limited',
+    })
+    summary_response = client.post(url, {
+        view_name + '-current_step': view_class.SOLE_TRADER_CONFIRM,
+        view_class.SOLE_TRADER_CONFIRM + '-sole_trader': True,
+    })
+    done_response = client.post(url, {
+        view_name + '-current_step': view_class.SUMMARY,
+    })
+
+    assert done_response.status_code == 302
+    assert done_response.get('Location') == str(view_class.success_url)
+    assert b'Continue my exporting journey' in summary_response.content
+    assert summary_response.context_data['all_cleaned_data'] == {
+        'used_online_marketplace': False,
+        'company_number': '',
+        'sole_trader': True,
+        'regular_exporter': True,
+        'company_name': 'Other Example limited',
+        'sector': 'HS01',
+        'exported_before': True
+    }
 
 
 def test_companies_house_search_validation_error(client):

@@ -34,6 +34,7 @@ class TriageWizardFormView(SessionWizardView):
     REGULAR_EXPORTER = 'REGULAR_EXPORTER'
     ONLINE_MARKETPLACE = 'ONLINE_MARKETPLACE'
     COMPANY = 'COMPANY'
+    SOLE_TRADER_CONFIRM = 'SOLE_TRADER_CONFIRM'
     SUMMARY = 'SUMMARY'
 
     form_list = (
@@ -42,7 +43,8 @@ class TriageWizardFormView(SessionWizardView):
         (REGULAR_EXPORTER, forms.RegularExporterForm),
         (ONLINE_MARKETPLACE, forms.OnlineMarketplaceForm),
         (COMPANY, forms.CompanyForm),
-        (SUMMARY, forms.SummaryForm),
+        (SOLE_TRADER_CONFIRM, forms.SoleTraderForm),
+        (SUMMARY, forms.EmptyForm),
     )
     templates = {
         SECTOR: 'triage/wizard-step-sector.html',
@@ -50,6 +52,7 @@ class TriageWizardFormView(SessionWizardView):
         REGULAR_EXPORTER: 'triage/wizard-step-regular-exporter.html',
         ONLINE_MARKETPLACE: 'triage/wizard-step-online-marketplace.html',
         COMPANY: 'triage/wizard-step-company.html',
+        SOLE_TRADER_CONFIRM: 'triage/wizard-step-sole-trader.html',
         SUMMARY: 'triage/wizard-step-summary.html',
     }
     success_url = reverse_lazy('custom-page')
@@ -63,6 +66,8 @@ class TriageWizardFormView(SessionWizardView):
         return self.persisted_triage_answers
 
     def process_step(self, form):
+        if self.is_user_skipping_current_step:
+            return {}
         if self.steps.current == self.REGULAR_EXPORTER:
             is_regular = forms.get_is_regular_exporter(form.cleaned_data)
             self.condition_dict[self.ONLINE_MARKETPLACE] = not is_regular
@@ -70,7 +75,21 @@ class TriageWizardFormView(SessionWizardView):
             has_exported = forms.get_has_exported_before(form.cleaned_data)
             self.condition_dict[self.ONLINE_MARKETPLACE] = has_exported
             self.condition_dict[self.REGULAR_EXPORTER] = has_exported
+        elif self.steps.current == self.COMPANY:
+            is_found = forms.get_is_limited_company(form.cleaned_data)
+            self.condition_dict[self.SOLE_TRADER_CONFIRM] = not is_found
         return super().process_step(form)
+
+    def render_next_step(self, form):
+        if self.steps.current == self.SOLE_TRADER_CONFIRM:
+            if not forms.get_is_sole_trader(form.cleaned_data):
+                return self.render_goto_step(self.COMPANY)
+        if self.steps.current == self.COMPANY:
+            if self.is_user_skipping_current_step:
+                self.storage.set_step_data(self.COMPANY, {})
+                self.storage.set_step_data(self.SOLE_TRADER_CONFIRM, {})
+                return self.render_goto_step(self.SUMMARY)
+        return super().render_next_step(form)
 
     def get_template_names(self):
         return [self.templates[self.steps.current]]
@@ -83,10 +102,20 @@ class TriageWizardFormView(SessionWizardView):
         # answers
         return 'result' in self.request.GET
 
+    @property
+    def is_user_skipping_current_step(self):
+        return 'wizard_skip_step' in self.request.POST
+
     def get_all_cleaned_data(self):
-        if self.is_user_reviewing_persisted_answers:
-            return self.persisted_triage_answers
-        return super().get_all_cleaned_data()
+        # when updating answers the user can go from SUMMARY back to
+        # COMPANY, then clicks forwards (without going all the way to the end)
+        # meaning the steps not visited before COMPANY will not be present
+        # in get_all_cleaned_data. Solve this by using persisted_triage_answers
+        # and updating with get_all_cleaned_data
+        return {
+            **self.persisted_triage_answers,
+            **super().get_all_cleaned_data()
+        }
 
     def get(self, *args, **kwargs):
         if self.is_user_reviewing_persisted_answers:
